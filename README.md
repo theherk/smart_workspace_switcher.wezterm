@@ -10,7 +10,7 @@ A smart Wezterm workspace switcher inspired by [t-smart-tmux-session-manager](ht
 
 ## Dependencies
 
-* zoxide
+* [zoxide](https://github.com/ajeetdsouza/zoxide), or any command that prints one project path per line (see [Using another project list](#using-another-project-list))
 
 ### Setup
 
@@ -64,6 +64,23 @@ You can include `extra_args` in the call to `switch_workspace` to filter the res
   ```lua
   workspace_switcher.switch_workspace({ extra_args = " | rg -Fxf ~/.projects" })
   ```
+
+#### Using another project list
+
+By default the plugin lists projects with `zoxide query -l` and records a chosen project with `zoxide add`. To use another source, such as [zop](https://github.com/theherk/zop), set a list command and a visit command:
+
+  ```lua
+  workspace_switcher.list_command = "zop list --no-tilde"
+  workspace_switcher.visit_command = "zop visit"
+  ```
+
+`list_command` is a shell command that prints one absolute path per line. It replaces `zoxide query -l`, and `extra_args` is not used with it. `visit_command` runs with the project path as its last, shell-quoted argument.
+
+The visit is recorded when you create a workspace from a path, and when you switch to an existing workspace whose name is a path (`~/x` or `/x`). The cached list is dropped after each visit, because the ranking changed.
+
+When `$SHELL` is fish, commands run with `--no-config`, which is faster and keeps config output out of the list.
+
+GUI applications often start with a minimal `PATH`, so give the commands by absolute path.
 
 #### Changing elements of the fuzzy finder
 
@@ -151,4 +168,12 @@ To define a custom path to `zoxide`:
 
   ```lua
   workspace_switcher.zoxide_path = "/path/to/zoxide"
+  ```
+
+## Development
+
+The tests run the plugin against a stub `wezterm`:
+
+  ```sh
+  lua test/run.lua
   ```

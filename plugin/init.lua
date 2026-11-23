@@ -14,10 +14,14 @@ local is_windows = string.find(wezterm.target_triple, "windows") ~= nil
 
 ---@class public_module
 ---@field zoxide_path string
+---@field list_command? string a shell command that prints one project path per line; replaces `zoxide query -l`
+---@field visit_command? string a shell command that records a visit, given the path as its last argument; replaces `zoxide add`
 ---@field choices {get_zoxide_elements: (fun(choices: InputSelector_choices, opts: choice_opts?): InputSelector_choices), get_workspace_elements: (fun(choices: InputSelector_choices): (InputSelector_choices, workspace_ids))}
 ---@field workspace_formatter fun(label: string): string
 local pub = {
 	zoxide_path = "zoxide",
+	list_command = nil,
+	visit_command = nil,
 	choices = {},
 	workspace_formatter = function(label)
 		return wezterm.format({
@@ -41,7 +45,12 @@ end)
 ---@param cmd string
 ---@return string
 local run_child_process = function(cmd)
-	local process_args = { os.getenv("SHELL"), "-c", cmd }
+	local shell = os.getenv("SHELL") or "/bin/sh"
+	local process_args = { shell, "-c", cmd }
+	if shell:match("fish$") then
+		-- Skip the user's config: it is slow, and may print to stdout.
+		process_args = { shell, "--no-config", "-c", cmd }
+	end
 	if is_windows then
 		process_args = { "cmd", "/c", cmd }
 	end
@@ -51,6 +60,36 @@ local run_child_process = function(cmd)
 		wezterm.log_error("Child process '" .. cmd .. "' failed with stderr: '" .. stderr .. "'")
 	end
 	return stdout
+end
+
+---The command that lists projects, one path per line.
+---@param opts? choice_opts
+---@return string
+local function list_command(opts)
+	if pub.list_command then
+		return pub.list_command
+	end
+	return pub.zoxide_path .. " query -l " .. ((opts and opts.extra_args) or "")
+end
+
+---Records that a project was opened.
+---@param path string
+local function record_visit(path)
+	local cmd = pub.visit_command or (pub.zoxide_path .. " add")
+	run_child_process(cmd .. " " .. wezterm.shell_quote_arg(path))
+	-- The ranking just changed, so a cached list is out of date.
+	pub.invalidate_cache()
+end
+
+---The directory behind a workspace name, if the name is a path (`~/x` or `/x`).
+---@param workspace string
+---@return string|nil
+local function workspace_path(workspace)
+	local path = workspace:gsub("^~", wezterm.home_dir)
+	if path:sub(1, 1) == "/" then
+		return path
+	end
+	return nil
 end
 
 ---@param choice_table InputSelector_choices
@@ -75,7 +114,7 @@ function pub.choices.get_zoxide_elements(choice_table, opts)
 		opts = { extra_args = "", workspace_ids = {} }
 	end
 
-	local stdout = run_child_process(pub.zoxide_path .. " query -l " .. (opts.extra_args or ""))
+	local stdout = run_child_process(list_command(opts))
 
 	for _, path in ipairs(wezterm.split_by_newlines(stdout)) do
 		local updated_path = string.gsub(path, wezterm.home_dir, "~")
@@ -116,7 +155,7 @@ function pub.get_choices(opts, cache_ttl)
 		end
 	else
 		local zoxide_choices = {}
-		local stdout = run_child_process(pub.zoxide_path .. " query -l " .. (opts.extra_args or ""))
+		local stdout = run_child_process(list_command(opts))
 		for _, path in ipairs(wezterm.split_by_newlines(stdout)) do
 			local updated_path = string.gsub(path, wezterm.home_dir, "~")
 			table.insert(zoxide_choices, {
@@ -184,8 +223,7 @@ local function zoxide_chosen(window, pane, path, label_path)
 		path,
 		label_path
 	)
-	-- increment zoxide path score
-	run_child_process(pub.zoxide_path .. " add " .. path)
+	record_visit(path)
 end
 
 ---InputSelector callback when workspace element is chosen
@@ -206,6 +244,10 @@ local function workspace_chosen(window, pane, workspace, label_workspace)
 		workspace,
 		label_workspace
 	)
+	local path = workspace_path(workspace)
+	if path then
+		record_visit(path)
+	end
 end
 
 -- Modify the switch_workspace function to accept cache_ttl
